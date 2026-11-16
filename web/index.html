@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Winners — статистика спортивных ставок</title>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark">W</div>
+        <div class="brand-text">
+          <strong>Winners</strong>
+          <span>аналитика ставок</span>
+        </div>
+      </div>
+
+      <nav class="nav" id="nav">
+        <button class="nav-item is-active" data-view="stats">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M7 20V10m5 10V5m5 15v-7"/></svg>
+          <span>Общая статистика</span>
+        </button>
+        <button class="nav-item" data-view="history">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v5l3 2M4.9 4.9A10 10 0 1 1 2 12"/><path d="M2 6v6h6"/></svg>
+          <span>История ставок</span>
+        </button>
+        <button class="nav-item" data-view="add">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span>Новая ставка</span>
+        </button>
+        <button class="nav-item" data-view="balance">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h13a1 1 0 0 1 1 1v2"/><path d="M3 8v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2"/><path d="M21 9v4h-4a2 2 0 0 1 0-4z"/></svg>
+          <span>Баланс</span>
+        </button>
+        <button class="nav-item" data-view="settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 2 15H1.9a2 2 0 1 1 0-4H2a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 4.1V4a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 20 11h.2a2 2 0 1 1 0 4H20z"/></svg>
+          <span>Настройки</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="hotkeys" title="Горячие клавиши">
+          <span><b>n</b> — новая ставка</span>
+          <span><b>/</b> — поиск в истории</span>
+          <span><b>Esc</b> — закрыть окно</span>
+        </div>
+        <div class="status-card" id="server-status-card">
+          <div class="status-row">
+            <span class="status-dot" id="server-dot"></span>
+            <span id="server-status-text">Проверка связи…</span>
+          </div>
+          <div class="status-hint" id="server-status-hint">—</div>
+        </div>
+        <div class="version" id="app-version">Winners</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn only-mobile" id="menu-toggle" title="Меню">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <div class="topbar-title">
+          <h1 id="view-title">Общая статистика</h1>
+          <p id="view-subtitle">Сводка по всем ставкам за выбранный период</p>
+        </div>
+        <div class="topbar-actions">
+          <span class="freshness" id="freshness" title="Актуальность данных">—</span>
+          <button class="icon-btn" id="btn-refresh" title="Обновить данные">
+            <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-theme" title="Сменить тему">
+            <svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="views">
+        <!-- ================= ОБЩАЯ СТАТИСТИКА ================= -->
+        <section class="view is-active" id="view-stats">
+          <div class="toolbar">
+            <div class="chips" id="range-chips">
+              <button class="chip" data-range="7d">7 дней</button>
+              <button class="chip is-active" data-range="30d">30 дней</button>
+              <button class="chip" data-range="90d">90 дней</button>
+              <button class="chip" data-range="365d">Год</button>
+              <button class="chip" data-range="all">Всё время</button>
+            </div>
+            <div class="toolbar-group">
+              <label class="field-inline">
+                <span>с</span>
+                <input type="date" id="stats-from" class="input" />
+              </label>
+              <label class="field-inline">
+                <span>по</span>
+                <input type="date" id="stats-to" class="input" />
+              </label>
+              <select id="stats-sport" class="input"><option value="all">Все виды спорта</option></select>
+              <select id="stats-source" class="input"><option value="0">Все источники</option></select>
+              <button class="btn ghost" id="stats-apply">Применить</button>
+              <button class="btn ghost" id="stats-export" title="Скачать сводку статистики в CSV">Экспорт CSV</button>
+            </div>
+          </div>
+
+          <div class="kpi-grid" id="kpi-grid"></div>
+          <div class="kpi-grid" id="stats-streaks"></div>
+
+          <div class="panel-grid" id="stats-panels">
+            <article class="panel" data-panel="timeline">
+              <header class="panel-head">
+                <div>
+                  <h3>Динамика финансового результата</h3>
+                  <p class="panel-sub">Профит по дням и накопленный итог</p>
+                </div>
+                <button class="panel-menu-btn" title="Действия">⋯</button>
+              </header>
+              <div class="chart" id="chart-timeline"></div>
+            </article>
+
+            <article class="panel" data-panel="status">
+              <header class="panel-head">
+                <div>
+                  <h3>Состав ставок по статусам</h3>
+                  <p class="panel-sub">Количество ставок в каждой категории</p>
+                </div>
+                <button class="panel-menu-btn" title="Действия">⋯</button>
+              </header>
+              <div class="chart" id="chart-status"></div>
+            </article>
+
+            <article class="panel" data-panel="amounts">
+              <header class="panel-head">
+                <div>
+                  <h3>Суммы по категориям</h3>
+                  <p class="panel-sub">Активные, выигрышные и проигрышные ставки</p>
+                </div>
+                <button class="panel-menu-btn" title="Действия">⋯</button>
+              </header>
+              <div class="chart" id="chart-amounts"></div>
+            </article>
+
+            <article class="panel" data-panel="winrate">
+              <header class="panel-head">
+                <div>
+                  <h3>Проходимость и средний коэффициент</h3>
+                  <p class="panel-sub">Ключевые показатели качества прогнозов</p>
+                </div>
+                <button class="panel-menu-btn" title="Действия">⋯</button>
+              </header>
+              <div class="chart" id="chart-winrate"></div>
+            </article>
+
+            <article class="panel" data-panel="sports">
+              <header class="panel-head">
+                <div>
+                  <h3>Результат по видам спорта</h3>
+                  <p class="panel-sub">Финансовый результат в разрезе дисциплин</p>
+                </div>
+                <button class="panel-menu-btn" title="Действия">⋯</button>
+              </header>
+              <div class="chart tall" id="chart-sports"></div>
+            </article>
+
+            <article class="panel" data-panel="sources">
+              <header class="panel-head">
+                <div>
+                  <h3>Эффективность источников</h3>
+                  <p class="panel-sub">Профит и проходимость по источникам прогнозов</p>
+                </div>
+                <button class="panel-menu-btn" title="Действия">⋯</button>
+              </header>
+              <div class="chart tall" id="chart-sources"></div>
+            </article>
+
+            <article class="panel" data-panel="coefficients">
+              <header class="panel-head">
+                <div>
+                  <h3>Распределение по коэффициентам</h3>
+                  <p class="panel-sub">Проходимость и результат в диапазонах коэффициентов</p>
+                </div>
+                <button class="panel-menu-btn" title="Действия">⋯</button>
+              </header>
+              <div class="chart" id="chart-coefficients"></div>
+            </article>
+
+            <article class="panel" data-panel="weekdays">
+              <header class="panel-head">
+                <div>
+                  <h3>Активность по дням недели</h3>
+                  <p class="panel-sub">Объём ставок и результат по дням</p>
+                </div>
+                <button class="panel-menu-btn" title="Действия">⋯</button>
+              </header>
+              <div class="chart" id="chart-weekdays"></div>
+            </article>
+
+            <article class="panel" data-panel="drawdown">
+              <header class="panel-head">
+                <div>
+                  <h3>Просадка капитала</h3>
+                  <p class="panel-sub">Накопленный итог и отклонение от пика</p>
+                </div>
+                <button class="panel-menu-btn" title="Действия">⋯</button>
+              </header>
+              <div class="chart" id="chart-drawdown"></div>
+            </article>
+
+            <article class="panel" data-panel="table-sports">
+              <header class="panel-head">
+                <div><h3>Сводка по видам спорта</h3></div>
+                <button class="panel-menu-btn" title="Действия">⋯</button>
+              </header>
+              <div class="table-wrap" id="table-sports"></div>
+            </article>
+            <article class="panel" data-panel="table-sources">
+              <header class="panel-head">
+                <div><h3>Сводка по источникам</h3></div>
+                <button class="panel-menu-btn" title="Действия">⋯</button>
+              </header>
+              <div class="table-wrap" id="table-sources"></div>
+            </article>
+            <article class="panel" data-panel="table-months">
+              <header class="panel-head">
+                <div><h3>Отчёт по месяцам</h3></div>
+                <button class="panel-menu-btn" title="Действия">⋯</button>
+              </header>
+              <div class="table-wrap" id="table-months"></div>
+            </article>
+
+            <article class="panel" data-panel="compare">
+            <header class="panel-head">
+              <div>
+                <h3>Сравнение с предыдущим периодом</h3>
+                <p class="panel-sub" id="stats-compare-range">Текущий период против такого же по длительности</p>
+              </div>
+              <button class="panel-menu-btn" title="Действия">⋯</button>
+            </header>
+            <div class="table-wrap" id="stats-compare"></div>
+          </article>
+          </div>
+        </section>
+
+        <!-- ================= ИСТОРИЯ ================= -->
+        <section class="view" id="view-history">
+          <div class="toolbar wrap" id="history-filters">
+            <div class="chips" id="status-chips">
+              <button class="chip is-active" data-status="all">Все</button>
+              <button class="chip" data-status="pending">Текущие</button>
+              <button class="chip" data-status="won">Выигрышные</button>
+              <button class="chip" data-status="lost">Проигрышные</button>
+              <button class="chip" data-status="push">Возврат</button>
+            </div>
+            <div class="toolbar-group">
+              <input type="search" id="history-search" class="input grow" placeholder="Поиск: событие, прогноз, источник, комментарий" />
+              <select id="history-sport" class="input"><option value="all">Все виды спорта</option></select>
+              <select id="history-source" class="input"><option value="0">Все источники</option></select>
+              <label class="field-inline"><span>с</span><input type="date" id="history-from" class="input" /></label>
+              <label class="field-inline"><span>по</span><input type="date" id="history-to" class="input" /></label>
+              <select id="history-sort" class="input">
+                <option value="created_at">По дате</option>
+                <option value="event_name">По событию</option>
+                <option value="coefficient">По коэффициенту</option>
+                <option value="stake">По сумме</option>
+                <option value="status">По статусу</option>
+              </select>
+              <button class="btn ghost" id="history-order" data-order="desc">↓ убыв.</button>
+              <button class="btn ghost" id="history-reset">Сбросить</button>
+              <button class="btn ghost" id="history-export" title="Скачать историю ставок в CSV">Экспорт CSV</button>
+            </div>
+          </div>
+
+          <div class="bulk-bar hidden" id="history-bulk">
+            <span class="bulk-count" id="history-bulk-count">Выбрано: 0</span>
+            <div class="bulk-actions">
+              <select id="history-bulk-status" class="input small">
+                <option value="pending">Активная</option>
+                <option value="won">Выигрышная</option>
+                <option value="lost">Проигрышная</option>
+                <option value="push">Возврат</option>
+                <option value="cancelled">Отменена</option>
+              </select>
+              <button class="btn ghost small" id="history-bulk-apply" type="button">Сменить статус</button>
+              <button class="btn danger small" id="history-bulk-delete" type="button">Удалить выбранные</button>
+              <button class="btn ghost small" id="history-bulk-clear" type="button">Снять выбор</button>
+            </div>
+          </div>
+
+          <div class="source-status" id="source-status"></div>
+
+          <div class="panel">
+            <div class="table-wrap" id="history-table"></div>
+            <div class="pager">
+              <span id="history-count">—</span>
+              <div class="pager-actions">
+                <select id="history-limit" class="input small">
+                  <option value="25">25</option>
+                  <option value="50" selected>50</option>
+                  <option value="100">100</option>
+                </select>
+                <button class="btn ghost" id="history-prev">Назад</button>
+                <span id="history-page">1</span>
+                <button class="btn ghost" id="history-next">Вперёд</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= НОВАЯ СТАВКА ================= -->
+        <section class="view" id="view-add">
+          <div class="split">
+            <div class="panel">
+              <header class="panel-head">
+                <div>
+                  <h3>Добавить ставку</h3>
+                  <p class="panel-sub">Ручной ввод данных о новой ставке</p>
+                </div>
+              </header>
+
+              <form id="bet-form" class="form" novalidate>
+                <div class="chips" id="bet-kind-switch">
+                  <button type="button" class="chip is-active" data-kind="single">Одиночная</button>
+                  <button type="button" class="chip" data-kind="express">Экспресс</button>
+                </div>
+
+                <div class="form-row">
+                  <label class="field">
+                    <span>Вид спорта *</span>
+                    <select id="bet-sport" class="input" required></select>
+                    <em class="err" data-err="sport"></em>
+                  </label>
+                  <label class="field">
+                    <span>Источник ставки</span>
+                    <select id="bet-source" class="input"></select>
+                    <em class="hint" id="bet-source-last"></em>
+                    <em class="err" data-err="source"></em>
+                  </label>
+                </div>
+
+                <div id="single-fields">
+                  <label class="field">
+                    <span>Название события *</span>
+                    <input id="bet-event" class="input" list="event-list" placeholder="Зенит — Спартак" autocomplete="off" />
+                    <datalist id="event-list"></datalist>
+                    <em class="err" data-err="event"></em>
+                    <em class="hint">Подсказки из ранее введённых событий; при выборе подставятся коэффициент, прогноз и источник.</em>
+                  </label>
+                </div>
+
+                <div id="express-fields" class="hidden">
+                  <div class="legs-head">
+                    <span>События экспресса</span>
+                    <button type="button" class="btn ghost small" id="btn-add-leg">Добавить событие</button>
+                  </div>
+                  <div class="legs-list" id="express-legs"></div>
+                  <em class="err" data-err="legs"></em>
+                  <em class="hint">В экспрессе минимум два события. Для каждой ноги укажите коэффициент и результат: зашла, не зашла или возврат.</em>
+                </div>
+
+                <div class="form-row">
+                  <label class="field" id="bet-coef-field">
+                    <span>Коэффициент *</span>
+                    <input type="number" step="0.01" min="1.01" id="bet-coef" class="input" placeholder="2.10" />
+                    <em class="err" data-err="coefficient"></em>
+                  </label>
+                  <label class="field">
+                    <span>Сумма ставки *</span>
+                    <input type="number" step="1" min="1" id="bet-stake" class="input" placeholder="1000" required />
+                    <em class="err" data-err="stake"></em>
+                  </label>
+                  <label class="field">
+                    <span>Дата ставки</span>
+                    <input type="datetime-local" id="bet-date" class="input" />
+                  </label>
+                </div>
+
+                <div class="calc" id="bet-sizing">
+                  <div class="calc-head">
+                    <span>Калькулятор размера ставки</span>
+                    <select id="sizing-mode" class="input small">
+                      <option value="manual">Вручную</option>
+                      <option value="flat">Фиксированный % банкролла</option>
+                      <option value="kelly">Kelly</option>
+                    </select>
+                  </div>
+                  <div class="form-row">
+                    <label class="field hidden" id="sizing-param-field">
+                      <span id="sizing-param-label">% банкролла</span>
+                      <input type="number" step="0.1" min="0" id="sizing-param" class="input" placeholder="2" />
+                    </label>
+                    <div class="field">
+                      <span>Текущий банкролл</span>
+                      <div class="calc-value" id="sizing-bankroll">—</div>
+                    </div>
+                    <div class="field">
+                      <span>Рекомендуемая сумма</span>
+                      <div class="calc-value strong" id="sizing-result">—</div>
+                    </div>
+                  </div>
+                  <div class="form-actions">
+                    <button type="button" class="btn ghost small" id="sizing-apply">Подставить в сумму</button>
+                    <em class="hint" id="sizing-hint"></em>
+                  </div>
+                </div>
+
+                <label class="field" id="bet-prediction-field">
+                  <span>Прогноз (нужен для авто-расчёта)</span>
+                  <div class="input-with-actions">
+                    <input list="prediction-list" id="bet-prediction" class="input" placeholder="П1, X, ТБ 2.5, 1X, Ф1 (-1.5)" />
+                    <datalist id="prediction-list">
+                      <option value="П1"></option><option value="П2"></option><option value="X"></option>
+                      <option value="1X"></option><option value="X2"></option><option value="12"></option>
+                      <option value="ТБ 2.5"></option><option value="ТМ 2.5"></option>
+                      <option value="ТБ 3.5"></option><option value="ТМ 3.5"></option>
+                      <option value="Ф1 (-1.5)"></option><option value="Ф2 (+1)"></option>
+                    </datalist>
+                  </div>
+                  <em class="hint">Без прогноза результат потребует подтверждения вручную.</em>
+                </label>
+
+                <label class="field">
+                  <span>Комментарий</span>
+                  <textarea id="bet-comment" class="input" rows="2" placeholder="Заметка к ставке"></textarea>
+                </label>
+
+                <div class="form-actions">
+                  <button type="submit" class="btn primary" id="bet-submit">Сохранить ставку</button>
+                  <button type="reset" class="btn ghost">Очистить</button>
+                  <span class="form-total" id="bet-total"></span>
+                </div>
+              </form>
+            </div>
+
+            <div class="panel">
+              <header class="panel-head">
+                <div>
+                  <h3>Активные ставки</h3>
+                  <p class="panel-sub">Ставки, ожидающие результата</p>
+                </div>
+              </header>
+
+              <div class="active-list" id="active-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= БАЛАНС ================= -->
+        <section class="view" id="view-balance">
+          <div class="kpi-grid" id="balance-kpis"></div>
+
+          <div class="panel-grid">
+            <article class="panel">
+              <header class="panel-head">
+                <div>
+                  <h3>Кривая баланса счёта</h3>
+                  <p class="panel-sub">Как менялись средства на счёте по дням</p>
+                </div>
+              </header>
+              <div class="chart tall" id="chart-balance"></div>
+            </article>
+
+            <article class="panel" data-panel="balance-limits">
+              <header class="panel-head">
+                <div>
+                  <h3>Цели и лимиты</h3>
+                  <p class="panel-sub">Прогресс к цели, stop-loss и максимальный размер ставки</p>
+                </div>
+              </header>
+              <div class="table-wrap" id="balance-limits"></div>
+            </article>
+          </div>
+
+          <div class="settings-grid">
+            <article class="panel">
+              <header class="panel-head">
+                <div>
+                  <h3>Новая операция</h3>
+                  <p class="panel-sub">Пополнение или вывод средств со счёта</p>
+                </div>
+              </header>
+              <form class="form" id="balance-operation-form" onsubmit="event.preventDefault()">
+                <div class="form-row">
+                  <label class="field">
+                    <span>Тип операции</span>
+                    <select id="flow-kind" class="input">
+                      <option value="deposit">Пополнение</option>
+                      <option value="withdrawal">Вывод</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Сумма *</span>
+                    <input type="number" step="0.01" min="0.01" id="flow-amount" class="input" placeholder="1000" />
+                    <em class="err" data-err="flow-amount"></em>
+                  </label>
+                </div>
+                <label class="field">
+                  <span>Дата операции</span>
+                  <input type="datetime-local" id="flow-date" class="input" />
+                </label>
+                <label class="field">
+                  <span>Комментарий</span>
+                  <input id="flow-note" class="input" placeholder="Например: вывод на карту" />
+                </label>
+                <div class="form-actions">
+                  <button type="submit" class="btn primary" id="flow-submit">Добавить операцию</button>
+                </div>
+              </form>
+            </article>
+
+            <article class="panel span-2">
+              <header class="panel-head">
+                <div>
+                  <h3>История операций</h3>
+                  <p class="panel-sub">Пополнения и выводы средств</p>
+                </div>
+              </header>
+              <div class="table-wrap" id="balance-table"></div>
+            </article>
+          </div>
+        </section>
+
+        <!-- ================= НАСТРОЙКИ ================= -->
+        <section class="view" id="view-settings">
+          <div class="settings-grid">
+            <article class="panel">
+              <header class="panel-head">
+                <div>
+                  <h3>Источники ставок</h3>
+                  <p class="panel-sub">Откуда поступают прогнозы</p>
+                </div>
+                <div class="head-actions">
+                  <select id="sources-sort" class="input small" title="Сортировка источников">
+                    <option value="name">По названию</option>
+                    <option value="reliability">По надёжности</option>
+                    <option value="roi">По ROI</option>
+                    <option value="bets_count">По числу ставок</option>
+                    <option value="profit">По результату</option>
+                  </select>
+                  <button class="btn primary small" id="btn-add-source">Добавить источник</button>
+                </div>
+              </header>
+              <div class="table-wrap" id="sources-table"></div>
+            </article>
+
+            <article class="panel">
+              <header class="panel-head">
+                <div>
+                  <h3>Банкролл и лимиты</h3>
+                  <p class="panel-sub">Цель по банкроллу, stop-loss и ограничение размера ставки</p>
+                </div>
+              </header>
+              <form class="form" id="settings-bankroll" onsubmit="event.preventDefault()"></form>
+            </article>
+
+            <article class="panel">
+              <header class="panel-head">
+                <div>
+                  <h3>Уведомления и отображение</h3>
+                  <p class="panel-sub">Оповещения о результатах и настройки интерфейса</p>
+                </div>
+              </header>
+              <form class="form" id="settings-display" onsubmit="event.preventDefault()"></form>
+            </article>
+
+            <article class="panel">
+              <header class="panel-head">
+                <div>
+                  <h3>Данные</h3>
+                  <p class="panel-sub">Демонстрационный набор и очистка базы</p>
+                </div>
+              </header>
+              <div class="form">
+                <p class="hint">Демо-данные добавляются к текущим. Очистка удаляет ставки, события и операции по счёту.</p>
+                <div class="form-actions">
+                  <button class="btn ghost" id="btn-load-demo">Загрузить демо-данные</button>
+                  <button class="btn ghost" id="btn-reset-settings">Сбросить настройки</button>
+                  <button class="btn danger" id="btn-wipe">Удалить все данные</button>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+  <script src="/static/vendor/echarts.min.js"></script>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
