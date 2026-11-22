@@ -43,6 +43,12 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "notifications_enabled": True,
     "notify_on_settle": True,
     "notify_on_failure": True,
+    # Уведомления в Telegram (отправляет сервер, нужен доступ к api.telegram.org)
+    "telegram_enabled": False,
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "telegram_notify_on_create": True,
+    "telegram_notify_on_settle": True,
     # Отображение
     "currency": "RUB",
     "theme": "dark",

@@ -109,6 +109,7 @@ export const api = {
   getSettings: () => request('/api/settings'),
   updateSettings: (values) => request('/api/settings', { method: 'PUT', body: { values } }),
   resetSettings: () => request('/api/settings/reset', { method: 'POST' }),
+  testTelegram: () => request('/api/settings/telegram/test', { method: 'POST' }),
 
   // --- баланс (банкролл)
   bankrollSummary: () => request('/api/bankroll/summary'),

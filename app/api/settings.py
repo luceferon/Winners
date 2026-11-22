@@ -14,7 +14,7 @@ from app.defaults import (
     STATUS_LABELS,
 )
 from app.schemas import ActionResult, SettingsOut, SettingsUpdate
-from app.services import settings_service
+from app.services import settings_service, telegram_service
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -50,3 +50,12 @@ def reset_settings(db: Session = Depends(get_db)) -> ActionResult:
     """Сбросить настройки к значениям по умолчанию."""
     settings_service.reset_settings(db)
     return ActionResult(message="Настройки сброшены к значениям по умолчанию")
+
+
+@router.post("/telegram/test", response_model=ActionResult)
+def test_telegram(db: Session = Depends(get_db)) -> ActionResult:
+    """Отправить тестовое сообщение в Telegram с текущими настройками."""
+    ok, error = telegram_service.send_test_message(settings_service.get_settings(db))
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"Telegram: {error}")
+    return ActionResult(message="Тестовое сообщение отправлено в Telegram")

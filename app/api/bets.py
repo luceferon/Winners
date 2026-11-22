@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app import export
 from app.database import get_db
+from app.defaults import SETTLED_STATUSES
 from app.models import Bet, BetLeg
 from app.schemas import (
     ActionResult,
@@ -19,7 +20,7 @@ from app.schemas import (
     BetResultUpdate,
     BetUpdate,
 )
-from app.services import bets_service, timeutil
+from app.services import bets_service, telegram_service, timeutil
 from app.services.bets_service import BetError
 
 router = APIRouter(prefix="/api/bets", tags=["bets"])
@@ -156,12 +157,15 @@ def duplicate_bet(bet_id: int, db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("", status_code=201)
-def create_bet(payload: BetCreate, db: Session = Depends(get_db)) -> dict:
+def create_bet(
+    payload: BetCreate, background: BackgroundTasks, db: Session = Depends(get_db)
+) -> dict:
     """Добавить новую ставку вручную."""
     try:
         bet = bets_service.create_bet(db, payload)
     except BetError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    telegram_service.queue_bet_notification(background, db, bet.as_dict(), event="created")
     return bet.as_dict()
 
 
@@ -187,7 +191,12 @@ def delete_bet(bet_id: int, db: Session = Depends(get_db)) -> ActionResult:
 
 
 @router.patch("/{bet_id}/result")
-def set_result(bet_id: int, payload: BetResultUpdate, db: Session = Depends(get_db)) -> dict:
+def set_result(
+    bet_id: int,
+    payload: BetResultUpdate,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> dict:
     """Ручная корректировка результата ставки."""
     bet = db.get(Bet, bet_id)
     if bet is None:
@@ -196,6 +205,7 @@ def set_result(bet_id: int, payload: BetResultUpdate, db: Session = Depends(get_
         raise HTTPException(
             status_code=400, detail="Для экспресса отметьте результат каждого события"
         )
+    previous_status = bet.status
     bet = bets_service.set_result(
         db,
         bet,
@@ -204,12 +214,20 @@ def set_result(bet_id: int, payload: BetResultUpdate, db: Session = Depends(get_
         auto=False,
         comment=payload.comment,
     )
+    # Уведомляем только о смене статуса на рассчитанный, чтобы повторное
+    # сохранение того же результата не давало дубль в Telegram.
+    if bet.status != previous_status and bet.status in SETTLED_STATUSES:
+        telegram_service.queue_bet_notification(background, db, bet.as_dict(), event="settled")
     return bet.as_dict()
 
 
 @router.patch("/{bet_id}/legs/{leg_id}/result")
 def set_leg_result(
-    bet_id: int, leg_id: int, payload: BetLegResultUpdate, db: Session = Depends(get_db)
+    bet_id: int,
+    leg_id: int,
+    payload: BetLegResultUpdate,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
 ) -> dict:
     """Отметить результат отдельного события экспресса."""
     bet = db.get(Bet, bet_id)
@@ -218,8 +236,12 @@ def set_leg_result(
     leg = db.get(BetLeg, leg_id)
     if leg is None or leg.bet_id != bet_id:
         raise HTTPException(status_code=404, detail="Событие экспресса не найдено")
+    was_pending = bet.status == "pending"
     try:
         bet = bets_service.set_leg_result(db, bet, leg, payload.status)
     except BetError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Одно уведомление на экспресс — когда отмечена последняя нога.
+    if was_pending and bet.status in SETTLED_STATUSES:
+        telegram_service.queue_bet_notification(background, db, bet.as_dict(), event="settled")
     return bet.as_dict()

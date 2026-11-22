@@ -31,6 +31,18 @@ const BLOCKS = {
       { key: 'max_stake_percent', type: 'number', label: 'Максимум на ставку, % банкролла (0 — выключено)', min: 0, max: 100, step: 1 },
     ],
   },
+  telegram: {
+    save: 'Сохранить настройки Telegram',
+    hint: 'Токен бота выдаёт @BotFather, ID чата — @userinfobot. Сообщения отправляет сервер, поэтому браузер можно закрывать.',
+    test: 'Отправить тестовое сообщение',
+    fields: [
+      { key: 'telegram_enabled', type: 'switch', label: 'Отправлять уведомления в Telegram' },
+      { key: 'telegram_bot_token', type: 'text', label: 'Токен бота', placeholder: '123456789:AA...' },
+      { key: 'telegram_chat_id', type: 'text', label: 'ID чата', placeholder: '123456789' },
+      { key: 'telegram_notify_on_create', type: 'switch', label: 'Уведомлять о новых ставках' },
+      { key: 'telegram_notify_on_settle', type: 'switch', label: 'Уведомлять о расчёте ставок' },
+    ],
+  },
 };
 
 function buildField(field, value) {
@@ -116,7 +128,28 @@ function renderBlock(selector, blockKey) {
     }
   });
 
-  host.append(h('div', { class: 'form-actions' }, [saveBtn]));
+  const actions = [saveBtn];
+
+  if (block.test) {
+    const testBtn = h('button', { class: 'btn ghost', type: 'button' }, block.test);
+    testBtn.addEventListener('click', async () => {
+      testBtn.disabled = true;
+      try {
+        const result = await api.testTelegram();
+        toast('Проверка Telegram', result.message || 'Сообщение отправлено', 'ok');
+      } catch (error) {
+        notifyError(error);
+      } finally {
+        testBtn.disabled = false;
+      }
+    });
+    actions.push(testBtn);
+  }
+
+  if (block.hint) {
+    host.append(h('p', { class: 'hint' }, block.hint));
+  }
+  host.append(h('div', { class: 'form-actions' }, actions));
 }
 
 function payloadKeysText(payload) {
@@ -346,6 +379,7 @@ export function init() {
 export async function refresh() {
   renderBlock('#settings-display', 'display');
   renderBlock('#settings-bankroll', 'bankroll');
+  renderBlock('#settings-telegram', 'telegram');
 
   const sortSelect = $('#sources-sort');
   if (sortSelect) {
