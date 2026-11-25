@@ -457,3 +457,65 @@ def test_bets_bulk_status_requires_status(client):
         "/api/bets/bulk", json={"ids": [bet["id"]], "action": "status"}
     )
     assert response.status_code == 422
+
+
+# --- распознавание ставки со скриншота --------------------------------------
+RECOGNIZED_TEXT = "Прогресс - МХК Белгород\n2-й период: Больше (1.5)\nСтавка 100.00\n1,75"
+
+
+def test_recognize_endpoint_with_upload(client, monkeypatch):
+    from app.services import ocr_service
+
+    monkeypatch.setattr(ocr_service, "recognize_image", lambda data: RECOGNIZED_TEXT)
+    response = client.post(
+        "/api/bets/recognize",
+        files={"file": ("shot.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["event_name"] == "Прогресс - МХК Белгород"
+    assert body["prediction"] == "2-й период: Больше (1.5)"
+    assert body["coefficient"] == 1.75
+    assert body["stake"] == 100.0
+    assert body["raw_text"] == RECOGNIZED_TEXT
+
+
+def test_recognize_endpoint_reads_clipboard(client, monkeypatch):
+    from app.services import ocr_service
+
+    monkeypatch.setattr(ocr_service, "read_clipboard_image", lambda: b"\x89PNG\r\n\x1a\n")
+    monkeypatch.setattr(
+        ocr_service,
+        "recognize_image",
+        lambda data, binarize=False: "Зенит - Спартак\nкф 2,15\nСтавка 300 руб",
+    )
+    response = client.post("/api/bets/recognize")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["event_name"] == "Зенит - Спартак"
+    assert body["coefficient"] == 2.15
+    assert body["stake"] == 300.0
+
+
+def test_recognize_endpoint_without_image(client, monkeypatch):
+    from app.services import ocr_service
+
+    monkeypatch.setattr(ocr_service, "read_clipboard_image", lambda: None)
+    response = client.post("/api/bets/recognize")
+    assert response.status_code == 400
+    assert "буфер" in response.json()["detail"].lower()
+
+
+def test_recognize_endpoint_ocr_unavailable(client, monkeypatch):
+    from app.services import ocr_service
+
+    def boom(data):
+        raise ocr_service.OcrUnavailableError("Windows OCR недоступен")
+
+    monkeypatch.setattr(ocr_service, "recognize_image", boom)
+    response = client.post(
+        "/api/bets/recognize",
+        files={"file": ("shot.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+    )
+    assert response.status_code == 400
+    assert "OCR" in response.json()["detail"]

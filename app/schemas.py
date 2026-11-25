@@ -172,6 +172,26 @@ class BetListOut(BaseModel):
     offset: int
 
 
+class BetRecognitionLeg(BaseModel):
+    """Событие экспресса, распознанное со скриншота."""
+
+    event_name: str | None = None
+    prediction: str | None = None
+    coefficient: float | None = None
+
+
+class BetRecognitionOut(BaseModel):
+    """Поля ставки, распознанные со скриншота."""
+
+    kind: Literal["single", "express"] = "single"
+    event_name: str | None = None
+    prediction: str | None = None
+    coefficient: float | None = None
+    stake: float | None = None
+    legs: list[BetRecognitionLeg] = Field(default_factory=list)
+    raw_text: str = ""
+
+
 # --- Баланс (банкролл) ------------------------------------------------------
 CashFlowKind = Literal["deposit", "withdrawal"]
 

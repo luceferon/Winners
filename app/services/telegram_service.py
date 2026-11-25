@@ -75,13 +75,15 @@ def bet_created_text(bet: dict[str, Any], currency: str = "RUB") -> str:
         legs = bet.get("legs") or []
         title = f"🎯 Новый экспресс ({len(legs)} событий) · {sport}"
         lines.append(title)
-        if bet.get("prediction"):
-            lines.append(f"Прогноз: {bet['prediction']}")
-        # Для экспресса перечисляем каждое событие
+        # Для экспресса перечисляем каждое событие с прогнозом
         for leg in legs:
             event_name = leg.get("event_name") or ""
             coeff = leg.get("coefficient") or 0
-            lines.append(f"{_bold(event_name)} — кэф {_coefficient(coeff)}")
+            prediction = leg.get("prediction") or ""
+            if prediction:
+                lines.append(f"{_bold(event_name)} — {prediction}, кэф {_coefficient(coeff)}")
+            else:
+                lines.append(f"{_bold(event_name)} — кэф {_coefficient(coeff)}")
         # Общая сумма всех ставок в экспрессе
         total_stake = sum(leg.get("stake", 0) for leg in legs)
         if total_stake:

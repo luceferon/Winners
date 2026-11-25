@@ -39,6 +39,29 @@ async function request(path, { method = 'GET', body, params } = {}) {
   return data;
 }
 
+/** Отправить файл на сервер как multipart/form-data (без ручного JSON). */
+async function upload(path, blob, filename = 'screenshot.png') {
+  const form = new FormData();
+  form.append('file', blob, filename);
+  let response;
+  try {
+    response = await fetch(path, { method: 'POST', body: form });
+  } catch (error) {
+    throw new Error('Сервер недоступен. Проверьте, что приложение запущено.');
+  }
+
+  const text = await response.text();
+  let data = null;
+  if (text) {
+    try { data = JSON.parse(text); } catch { data = text; }
+  }
+  if (!response.ok) {
+    const detail = data && typeof data === 'object' ? data.detail : data;
+    throw new Error(formatError(detail) || `Ошибка запроса (${response.status})`);
+  }
+  return data;
+}
+
 function formatError(detail) {
   if (!detail) return '';
   if (typeof detail === 'string') return detail;
@@ -96,6 +119,9 @@ export const api = {
   duplicateBet: (id) => request(`/api/bets/${id}/duplicate`, { method: 'POST' }),
   bulkBets: (payload) => request('/api/bets/bulk', { method: 'POST', body: payload }),
   suggestBets: (params) => request('/api/bets/suggest', { params }),
+  recognizeBet: (blob) => (blob
+    ? upload('/api/bets/recognize', blob)
+    : request('/api/bets/recognize', { method: 'POST' })),
   settlementsFeed: (params) => request('/api/bets/settlements/feed', { params }),
   exportBets: (params) => download('/api/bets/export', params, `winners-bets-${todayStamp()}.csv`),
 

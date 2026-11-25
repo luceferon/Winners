@@ -331,6 +331,85 @@ function handleFormChange() {
   renderSizing();
 }
 
+// --- распознавание ставки со скриншота -------------------------------------
+/** Взять картинку из буфера браузера (если доступ и разрешение есть). */
+async function clipboardImageBlob() {
+  if (!navigator.clipboard || !navigator.clipboard.read) return null;
+  try {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      const type = item.types.find((value) => value.startsWith('image/'));
+      if (type) return await item.getType(type);
+    }
+  } catch {
+    /* нет прав или буфер пуст — распознаем картинку на стороне сервера */
+  }
+  return null;
+}
+
+/** Заполнить поля формы распознанными данными. */
+function applyRecognized(data) {
+  if (data.kind === 'express' && Array.isArray(data.legs) && data.legs.length) {
+    applyExpressRecognized(data);
+    return;
+  }
+
+  setKind('single');
+  const event = $('#bet-event');
+  if (event && data.event_name) event.value = data.event_name;
+  const prediction = $('#bet-prediction');
+  if (prediction && data.prediction) prediction.value = data.prediction;
+  const coef = $('#bet-coef');
+  if (coef && data.coefficient != null) coef.value = String(data.coefficient);
+  const stake = $('#bet-stake');
+  if (stake && data.stake != null) stake.value = String(data.stake);
+  handleFormChange();
+}
+
+/** Заполнить форму распознанным экспрессом: строки событий и сумма ставки. */
+function applyExpressRecognized(data) {
+  setKind('express');
+  const host = $('#express-legs');
+  if (host) clear(host);
+  data.legs.forEach((leg) => addLegRow({
+    event_name: leg.event_name || '',
+    prediction: leg.prediction || '',
+    coefficient: leg.coefficient != null ? leg.coefficient : undefined,
+  }));
+  const stake = $('#bet-stake');
+  if (stake && data.stake != null) stake.value = String(data.stake);
+  handleFormChange();
+}
+
+/** Кнопка «Вставить ставку»: распознать скриншот и заполнить форму. */
+async function pasteBetFromImage(event) {
+  const button = event && event.currentTarget ? event.currentTarget : $('#btn-paste-bet');
+  if (button) { button.disabled = true; button.textContent = 'Распознавание…'; }
+  try {
+    const blob = await clipboardImageBlob();
+    const data = await api.recognizeBet(blob);
+    const recognized = data.kind === 'express'
+      ? Array.isArray(data.legs) && data.legs.length > 0
+      : ['event_name', 'prediction', 'coefficient', 'stake']
+        .some((key) => data[key] != null && data[key] !== '');
+    if (!recognized) {
+      toast('Не удалось распознать', 'На скриншоте не найдены поля ставки', 'warn');
+      return;
+    }
+    applyRecognized(data);
+    if (data.kind === 'express') {
+      toast('Экспресс распознан', `${data.legs.length} событий`, 'ok', 2600);
+    } else {
+      const coef = data.coefficient != null ? ` @ ${fmtCoef(data.coefficient)}` : '';
+      toast('Ставка распознана', `${data.event_name || 'без названия'}${coef}`, 'ok', 2600);
+    }
+  } catch (error) {
+    notifyError(error);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Вставить ставку'; }
+  }
+}
+
 // --- активные ставки --------------------------------------------------------
 function activeItem(bet) {
   const currency = store.currency;
@@ -501,6 +580,9 @@ export function init() {
 
   const addLegBtn = $('#btn-add-leg');
   if (addLegBtn) addLegBtn.addEventListener('click', () => { addLegRow(); handleFormChange(); });
+
+  const pasteBtn = $('#btn-paste-bet');
+  if (pasteBtn) pasteBtn.addEventListener('click', pasteBetFromImage);
 
   const legsHost = $('#express-legs');
   if (legsHost) {

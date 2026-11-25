@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+)
 from sqlalchemy.orm import Session
 
 from app import export
@@ -17,11 +26,13 @@ from app.schemas import (
     BetCreate,
     BetLegResultUpdate,
     BetListOut,
+    BetRecognitionOut,
     BetResultUpdate,
     BetUpdate,
 )
-from app.services import bets_service, telegram_service, timeutil
+from app.services import bets_service, ocr_service, telegram_service, timeutil
 from app.services.bets_service import BetError
+from app.services.ocr_service import OcrError, OcrUnavailableError
 
 router = APIRouter(prefix="/api/bets", tags=["bets"])
 
@@ -136,6 +147,25 @@ def bulk(payload: BetBulkIn, db: Session = Depends(get_db)) -> dict:
     try:
         return bets_service.bulk_action(db, payload.ids, payload.action, status=payload.status)
     except BetError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/recognize", response_model=BetRecognitionOut)
+def recognize_bet(file: UploadFile | None = File(default=None)) -> BetRecognitionOut:
+    """Распознать ставку со скриншота — из загруженного файла или буфера обмена."""
+    try:
+        data: bytes | None = None
+        if file is not None:
+            data = file.file.read()
+        if not data:
+            data = ocr_service.read_clipboard_image()
+        if not data:
+            raise HTTPException(
+                status_code=400,
+                detail="В буфере обмена нет изображения. Скопируйте скриншот и повторите.",
+            )
+        return BetRecognitionOut(**ocr_service.parse_image(data))
+    except (OcrUnavailableError, OcrError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
