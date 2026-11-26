@@ -17,7 +17,7 @@ DATABASE_URL = os.getenv("WINNERS_DATABASE_URL", f"sqlite:///{DB_PATH.as_posix()
 LOG_FILE = DATA_DIR / "winners.log"
 
 APP_TITLE = "Winners — статистика спортивных ставок"
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.2.0"
 
 # Заполнять базу демонстрационными данными при первом запуске (пустая БД).
 SEED_DEMO_ON_EMPTY = os.getenv("WINNERS_SEED_DEMO", "1") not in {"0", "false", "False"}

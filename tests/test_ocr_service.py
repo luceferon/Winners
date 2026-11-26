@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import io
+
 import pytest
+from PIL import Image
 
 from app.services import ocr_service
 
@@ -159,6 +162,71 @@ def test_parse_express_text_computes_missing_coefficient():
 
 def test_parse_express_text_returns_none_for_single_bet():
     assert ocr_service.parse_express_text(SCREENSHOT_TEXT) is None
+
+
+# Экспресс, где у каждой ноги три строки: событие, счёт, прогноз.
+# Счёт не должен попадать в поле прогноза (баг, найденный при тестировании).
+EXPRESS_WITH_SCORE_TEXT = "\n".join(
+    [
+        "Экспресс #5094",
+        "Амур - Ак Барс",
+        "1:4 (0:2, 1:2) П",
+        "Больше (6.5)",
+        "Кучинг - Пном Пень Гэлакси",
+        "1:0 33'",
+        "1-й тайм: Больше (0.5)",
+        "Ставка 100.00",
+        "руб.",
+        "3,17",
+        "1,73",
+        "1,83",
+        "Ожидание",
+    ]
+)
+
+
+def test_parse_express_text_skips_score_lines():
+    result = ocr_service.parse_express_text(EXPRESS_WITH_SCORE_TEXT)
+    assert result is not None
+    assert result["stake"] == 100.0
+    assert [leg["event_name"] for leg in result["legs"]] == [
+        "Амур - Ак Барс",
+        "Кучинг - Пном Пень Гэлакси",
+    ]
+    assert [leg["prediction"] for leg in result["legs"]] == [
+        "Больше (6.5)",
+        "1-й тайм: Больше (0.5)",
+    ]
+
+
+def test_parse_express_lines_skips_score_lines_and_binds_coefficients():
+    boxes = [
+        ocr_service.OcrLine("Экспресс #5094", 22.0, 3.0, 313.0, 40.0),
+        ocr_service.OcrLine("Амур - Ак Барс", 90.0, 110.0, 393.0, 147.0),
+        ocr_service.OcrLine("1:4 (0:2, 1:2) П", 92.0, 156.0, 400.0, 193.0),
+        ocr_service.OcrLine("Больше (6.5)", 92.0, 200.0, 258.0, 237.0),
+        ocr_service.OcrLine("Кучинг - Пном Пень Гэлакси", 90.0, 290.0, 560.0, 327.0),
+        ocr_service.OcrLine("1:0 33'", 92.0, 336.0, 250.0, 373.0),
+        ocr_service.OcrLine("1-й тайм: Больше (0.5)", 92.0, 380.0, 400.0, 417.0),
+        ocr_service.OcrLine("Ставка 100.00", 13.0, 470.0, 252.0, 507.0),
+        ocr_service.OcrLine("руб.", 263.0, 471.0, 327.0, 508.0),
+        ocr_service.OcrLine("3,17", 540.0, 470.0, 610.0, 507.0),
+        ocr_service.OcrLine("1,73", 730.0, 200.0, 800.0, 237.0),
+        ocr_service.OcrLine("1,83", 730.0, 380.0, 800.0, 417.0),
+        ocr_service.OcrLine("Ожидание", 880.0, 470.0, 1055.0, 507.0),
+    ]
+    result = ocr_service.parse_express_lines(boxes)
+    assert result is not None
+    assert [leg["event_name"] for leg in result["legs"]] == [
+        "Амур - Ак Барс",
+        "Кучинг - Пном Пень Гэлакси",
+    ]
+    assert [leg["prediction"] for leg in result["legs"]] == [
+        "Больше (6.5)",
+        "1-й тайм: Больше (0.5)",
+    ]
+    coefficients = [leg["coefficient"] for leg in result["legs"]]
+    assert coefficients == [1.73, 1.83]
 
 
 # Строки экспресса с координатами (апскейл ×3, как на 2.png). Порядок строк-
@@ -338,3 +406,149 @@ def test_recognize_image_rejects_empty_bytes():
 def test_recognize_image_rejects_garbage_bytes():
     with pytest.raises(ocr_service.OcrError):
         ocr_service.recognize_image(b"not-an-image")
+
+
+# --- замазывание суммы на скриншоте (тестовая фича) -------------------------
+
+
+def _make_image_bytes(width: int = 400, height: int = 200) -> bytes:
+    """Создать тестовое изображение с разными пикселями в зоне суммы."""
+    img = Image.new("RGB", (width, height), color=(255, 255, 255))
+    pixels = img.load()
+    # В нижней половине (где обычно сумма) делаем контрастный паттерн
+    for y in range(height // 2, height):
+        for x in range(width):
+            pixels[x, y] = ((x * 7 + y * 13) % 256, (x * 3) % 256, (y * 5) % 256)
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_blur_stake_region_returns_bytes():
+    boxes = [ocr_service.OcrLine("Ставка 100 руб.", 10, 150, 200, 180)]
+    out = ocr_service.blur_stake_region(_make_image_bytes(), boxes)
+    assert isinstance(out, bytes)
+    assert out[:8] == b"\x89PNG\r\n\x1a\n"  # PNG-сигнатура
+
+
+def test_blur_stake_region_changes_stake_pixels():
+    """Размытие применяется ко всей ширине строки со ставкой."""
+    original = _make_image_bytes()
+    boxes = [ocr_service.OcrLine("Ставка 100 руб.", 10, 150, 200, 180)]
+    out = ocr_service.blur_stake_region(original, boxes)
+    img_orig = Image.open(io.BytesIO(original))
+    img_out = Image.open(io.BytesIO(out))
+    width, height = img_orig.size
+    px_orig = img_orig.load()
+    px_out = img_out.load()
+    # полоса размытия: вся ширина, y от 150-pad до 180+pad
+    pad = ocr_service._BLUR_PADDING
+    y0, y1 = max(0, 150 - pad), min(height, 180 + pad)
+    changed = 0
+    for x in range(width):
+        for y in range(y0, y1):
+            if px_orig[x, y] != px_out[x, y]:
+                changed += 1
+    # реально заменили много пикселей по всей ширине
+    assert changed > 100
+
+
+def test_blur_stake_region_fallback_without_boxes():
+    """Если координат нет — замазывается нижняя половина изображения."""
+    original = _make_image_bytes()
+    out = ocr_service.blur_stake_region(original, None)
+    img_orig = Image.open(io.BytesIO(original))
+    img_out = Image.open(io.BytesIO(out))
+    px_orig = img_orig.load()
+    px_out = img_out.load()
+    width, height = img_orig.size
+    fallback_top = int(height * 0.5)
+    changed = sum(
+        1
+        for x in range(width)
+        for y in range(fallback_top, height)
+        if px_orig[x, y] != px_out[x, y]
+    )
+    assert changed > 100
+
+
+def test_blur_stake_region_handles_degenerate_boxes():
+    """Windows OCR может вернуть отрицательную ширину/высоту бокса.
+
+    Такие боксы не должны приводить к падению PIL crop.
+    """
+    original = _make_image_bytes()
+    # box с right < x и bottom < y (отрицательная ширина/высота)
+    boxes = [ocr_service.OcrLine("Ставка 100 руб.", 100, 150, 50, 80)]
+    # не должно упасть
+    out = ocr_service.blur_stake_region(original, boxes)
+    assert isinstance(out, bytes)
+    assert out[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_blur_stake_region_handles_zero_boxes():
+    """Бокс с нулевой площадью не должен приводить к падению."""
+    original = _make_image_bytes()
+    boxes = [ocr_service.OcrLine("Ставка 100 руб.", 50, 50, 50, 50)]
+    out = ocr_service.blur_stake_region(original, boxes)
+    assert isinstance(out, bytes)
+    assert out[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_blur_stake_region_blurs_amount_on_next_line():
+    """Если «Ставка» и сумма на разных строках — размываются обе."""
+    original = _make_image_bytes()
+    boxes = [
+        ocr_service.OcrLine("Ставка", 10, 150, 80, 175),
+        ocr_service.OcrLine("100.00", 10, 180, 80, 205),
+    ]
+    out = ocr_service.blur_stake_region(original, boxes)
+    img_orig = Image.open(io.BytesIO(original))
+    img_out = Image.open(io.BytesIO(out))
+    width, height = img_orig.size
+    px_orig = img_orig.load()
+    px_out = img_out.load()
+    pad = ocr_service._BLUR_PADDING
+    # размыта и строка «Ставка», и строка «100.00»
+    for y0, y1 in [(150 - pad, 175 + pad), (180 - pad, 205 + pad)]:
+        changed = sum(
+            1
+            for x in range(width)
+            for y in range(max(0, y0), min(height, y1))
+            if px_orig[x, y] != px_out[x, y]
+        )
+        assert changed > 50
+
+
+def test_blur_stake_region_blurs_all_money_lines():
+    """Размываются все строки с деньгами (ставка + возможная выплата)."""
+    original = _make_image_bytes()
+    boxes = [
+        ocr_service.OcrLine("Ставка 100 руб.", 10, 100, 200, 125),
+        ocr_service.OcrLine("Возможная выплата 185 руб.", 10, 200, 260, 225),
+    ]
+    out = ocr_service.blur_stake_region(original, boxes)
+    img_orig = Image.open(io.BytesIO(original))
+    img_out = Image.open(io.BytesIO(out))
+    width, height = img_orig.size
+    px_orig = img_orig.load()
+    px_out = img_out.load()
+    pad = ocr_service._BLUR_PADDING
+    for y0, y1 in [(100 - pad, 125 + pad), (200 - pad, 225 + pad)]:
+        changed = sum(
+            1
+            for x in range(width)
+            for y in range(max(0, y0), min(height, y1))
+            if px_orig[x, y] != px_out[x, y]
+        )
+        assert changed > 50
+
+
+def test_parse_image_full_returns_boxes():
+    """parse_image_full возвращает кортеж (результат, boxes)."""
+    data = _make_image_bytes()
+    parsed, result_boxes = ocr_service.parse_image_full(data)
+    assert isinstance(parsed, dict)
+    # при пустых байтах _recognize_boxes вернёт None
+    assert result_boxes is None or isinstance(result_boxes, list)
+

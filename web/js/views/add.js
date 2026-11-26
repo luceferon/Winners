@@ -13,6 +13,7 @@ const state = {
   suggestions: [],
   bankroll: null,
   sizingAmount: 0,
+  screenshotToken: null, // тестовая фича: токен скриншота для Telegram
 };
 
 // --- валидация формы --------------------------------------------------------
@@ -397,6 +398,8 @@ async function pasteBetFromImage(event) {
       return;
     }
     applyRecognized(data);
+    // тестовая фича: сохраняем токен скриншота, чтобы отправить фото в Telegram
+    state.screenshotToken = data.screenshot_token || null;
     if (data.kind === 'express') {
       toast('Экспресс распознан', `${data.legs.length} событий`, 'ok', 2600);
     } else {
@@ -478,6 +481,8 @@ async function submitForm(event) {
     comment: data.comment || null,
     created_at: toIsoOrNull(data.created_at),
   };
+  // тестовая фича: токен скриншота для отправки фото в Telegram
+  if (state.screenshotToken) payload.screenshot_token = state.screenshotToken;
   if (state.kind === 'express') {
     payload.legs = readLegs().map((leg) => ({
       event_name: leg.event_name,
@@ -502,6 +507,7 @@ async function submitForm(event) {
     const form = $('#bet-form');
     if (form) form.reset();
     clearFormExtras();
+    state.screenshotToken = null;
     await refreshActive();
     notifyDataChanged('bets');
   } catch (error) {

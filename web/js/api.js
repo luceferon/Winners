@@ -136,6 +136,7 @@ export const api = {
   updateSettings: (values) => request('/api/settings', { method: 'PUT', body: { values } }),
   resetSettings: () => request('/api/settings/reset', { method: 'POST' }),
   testTelegram: () => request('/api/settings/telegram/test', { method: 'POST' }),
+  detectTelegram: () => request('/api/settings/telegram/detect', { method: 'POST' }),
 
   // --- баланс (банкролл)
   bankrollSummary: () => request('/api/bankroll/summary'),

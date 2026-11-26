@@ -110,6 +110,7 @@ class BetCreate(BetBase):
     kind: Literal["single", "express"] = "single"
     status: BetStatus = "pending"
     legs: list[BetLegIn] = Field(default_factory=list)
+    screenshot_token: str | None = None  # тестовая фича: скриншот ставки для Telegram
 
     @model_validator(mode="after")
     def _validate_shape(self) -> "BetCreate":
@@ -190,6 +191,7 @@ class BetRecognitionOut(BaseModel):
     stake: float | None = None
     legs: list[BetRecognitionLeg] = Field(default_factory=list)
     raw_text: str = ""
+    screenshot_token: str | None = None  # тестовая фича: токен скриншота для Telegram
 
 
 # --- Баланс (банкролл) ------------------------------------------------------
@@ -238,6 +240,16 @@ class SettingsOut(BaseModel):
 
 class SettingsUpdate(BaseModel):
     values: dict[str, Any]
+
+
+class TelegramChatOut(BaseModel):
+    """Найденная группа бота для уведомлений."""
+
+    chat_id: str
+    title: str = ""
+    is_admin: bool = False
+    status: str = ""
+    warning: str = ""
 
 
 # --- Разное -----------------------------------------------------------------

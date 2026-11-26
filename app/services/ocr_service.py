@@ -72,6 +72,9 @@ _PREDICTION_RE = re.compile(
     r"|\bтб\b|\bтм\b|\bп1\b|\bп2\b|\b1x\b|\bx2\b|\b12\b",
     re.I,
 )
+# Счёт матча («1:4», «0:2», «1:0 33'») — строка между событием и прогнозом,
+# её нужно пропускать при сборке ног экспресса.
+_SCORE_RE = re.compile(r"\b\d{1,2}:\d{1,2}\b")
 
 
 # --- чтение буфера обмена ---------------------------------------------------
@@ -323,9 +326,28 @@ def _find_event(lines: list[str], skip: set[int]) -> tuple[str | None, set[int]]
     for index, line in enumerate(lines):
         if index in skip:
             continue
-        if _EVENT_RE.search(line):
+        if _is_event_line(line):
             return line, {index}
     return None, set()
+
+
+def _is_event_line(line: str) -> bool:
+    """Похожа ли строка на название события «команда - команда».
+
+    Первое слово слева от тире и первое слово справа должны начинаться
+    с заглавной буквы: команды пишутся с большой буквы, а прогнозы вроде
+    «Обе забьют - да» — нет (справа «да» строчная).
+    """
+    if not _EVENT_RE.search(line):
+        return False
+    parts = re.split(r"\s*[-—–]\s*", line, maxsplit=1)
+    if len(parts) != 2:
+        return False
+    left = parts[0].strip().split()
+    right = parts[1].strip().split()
+    if not left or not right:
+        return False
+    return left[0][0].isupper() and right[0][0].isupper()
 
 
 def _find_coefficient(
@@ -407,10 +429,31 @@ def _legs_block_range(lines: list[str], start: int) -> tuple[int, int]:
     return start, len(lines)
 
 
-def _legs_block(lines: list[str], start: int) -> list[str]:
-    """Строки событий экспресса: от заголовка до строки со суммой ставки."""
-    start, end = _legs_block_range(lines, start)
-    return lines[start:end]
+def _is_score_line(line: str) -> bool:
+    """Строка со счётом матча («1:4 (0:2, 1:2) П», «1:0 33'»).
+
+    Такая строка стоит между событием и прогнозом и не должна попадать
+    ни в название события, ни в прогноз.
+    """
+    return bool(_SCORE_RE.search(line)) and not _PREDICTION_RE.search(line)
+
+
+def _collect_leg_pairs(lines: list[str], start: int, end: int) -> list[tuple[int, int]]:
+    """Пары (индекс события, индекс прогноза) в блоке ног экспресса.
+
+    Событие определяется по шаблону «команда - команда», прогноз — первая
+    строка после события, не являющаяся счётом. Это поддерживает как ноги
+    из двух строк (событие + прогноз), так и из трёх (событие + счёт + прогноз).
+    """
+    event_indices = [i for i in range(start, end) if _is_event_line(lines[i])]
+    pairs: list[tuple[int, int]] = []
+    for ei in event_indices:
+        pi = ei + 1
+        while pi < end and _is_score_line(lines[pi]):
+            pi += 1
+        if pi < end:
+            pairs.append((ei, pi))
+    return pairs
 
 
 def _collect_coefficients(lines: list[str], start: int, stake: float | None) -> list[float]:
@@ -472,21 +515,21 @@ def parse_express_text(text: str) -> dict[str, Any] | None:
 
     stake, stake_lines = _find_stake(lines)
 
-    block = _legs_block(lines, header + 1)
-    legs: list[dict[str, Any]] = []
-    for index in range(0, len(block) - 1, 2):
-        legs.append(
-            {
-                "event_name": block[index] or None,
-                "prediction": block[index + 1] or None,
-                "coefficient": None,
-            }
-        )
+    start, end = _legs_block_range(lines, header + 1)
+    pairs = _collect_leg_pairs(lines, start, end)
+    legs: list[dict[str, Any]] = [
+        {
+            "event_name": lines[ei] or None,
+            "prediction": lines[pi] or None,
+            "coefficient": None,
+        }
+        for ei, pi in pairs
+    ]
     if len(legs) < 2:
         return None
 
-    start = max(stake_lines) + 1 if stake_lines else len(lines)
-    values = _collect_coefficients(lines, start, stake)
+    coef_start = max(stake_lines) + 1 if stake_lines else len(lines)
+    values = _collect_coefficients(lines, coef_start, stake)
     for leg, coefficient in zip(legs, _spread_coefficients(values, len(legs))):
         leg["coefficient"] = coefficient
 
@@ -574,22 +617,22 @@ def parse_express_lines(boxes: list[OcrLine]) -> dict[str, Any] | None:
     stake, stake_lines = _find_stake(texts)
 
     start, end = _legs_block_range(texts, header + 1)
-    leg_indices = list(range(start, end - 1, 2))
-    if len(leg_indices) < 2:
+    pairs = _collect_leg_pairs(texts, start, end)
+    if len(pairs) < 2:
         return None
 
     legs = [
         {
-            "event_name": texts[index] or None,
-            "prediction": texts[index + 1] or None,
+            "event_name": texts[ei] or None,
+            "prediction": texts[pi] or None,
             "coefficient": None,
         }
-        for index in leg_indices
+        for ei, pi in pairs
     ]
 
     stake_y = boxes[max(stake_lines)].y if stake_lines else None
     rows, total = _coefficient_rows(boxes, stake, stake_y)
-    predictions = [boxes[index + 1].y for index in leg_indices]
+    predictions = [boxes[pi].y for _, pi in pairs]
     coefficients = _bind_coefficients(rows, predictions)
 
     if total is not None:
@@ -623,12 +666,12 @@ def _recognize_boxes(data: bytes) -> list[OcrLine] | None:
         return None
 
 
-def parse_image(data: bytes) -> dict[str, Any]:
-    """Распознать изображение и вернуть поля ставки вместе с исходным текстом.
+def parse_image_full(data: bytes) -> tuple[dict[str, Any], list[OcrLine] | None]:
+    """Распознать изображение и вернуть (поля ставки, строки с координатами).
 
-    Если обычный проход потерял десятичную точку в сумме («200.00» -> «20000»),
-    изображение распознаётся повторно с бинаризацией — она точку сохраняет.
-    Из повторного прохода берётся только сумма: остальной текст он читает хуже.
+    Координаты нужны, чтобы замазать сумму ставки на скриншоте перед отправкой
+    в Telegram (тестовая фича). ``boxes`` — ``None``, если координаты получить
+    не удалось.
     """
     boxes = _recognize_boxes(data)
     text = _lines_to_text(boxes) if boxes is not None else recognize_image(data)
@@ -647,4 +690,149 @@ def parse_image(data: bytes) -> dict[str, Any]:
             if binary_stake is not None:
                 result["stake"] = binary_stake
     result["raw_text"] = text
+    return result, boxes
+
+
+def parse_image(data: bytes) -> dict[str, Any]:
+    """Распознать изображение и вернуть поля ставки вместе с исходным текстом.
+
+    Если обычный проход потерял десятичную точку в сумме («200.00» -> «20000»),
+    изображение распознаётся повторно с бинаризацией — она точку сохраняет.
+    Из повторного прохода берётся только сумма: остальной текст он читает хуже.
+    """
+    result, _ = parse_image_full(data)
     return result
+
+
+# --- замазывание суммы на скриншоте (тестовая фича) -------------------------
+
+# Радиус размытия для скрытия суммы ставки.
+_BLUR_RADIUS = 18
+# Отступ от границ строки при вырезании региона для размытия.
+_BLUR_PADDING = 12
+
+# Расширенный паттерн «любая информация о деньгах» для замазывания.
+# Ловит: ставку, сумму, выплату, баланс, прибыль, доход, потерю, выигрыш,
+# возврат, банкролл, депозит/вывод, а также символы и коды валют.
+# Используется ТОЛЬКО для замазывания на скриншоте (не для парсинга).
+_MONEY_RE = re.compile(
+    r"ставк|сумм|выплат|баланс|прибыл|доход|потер|выигрыш|проигрыш|"
+    r"возврат|банкрол|депозит|вывод|пополнен|кэшбэк|бонус|"
+    r"[₽$€£¥]|\brub\b|\busd\b|\beur\b|\bkzt\b|руб",
+    re.I,
+)
+
+
+def blur_stake_region(
+    image_bytes: bytes,
+    boxes: list[OcrLine] | None,
+    *,
+    stake_value: float | None = None,
+) -> bytes:
+    """Замазать **любую** информацию о деньгах на скриншоте и вернуть PNG-байты.
+
+    Размываются все строки, где встречаются деньги (ставка, сумма, выплата,
+    баланс, прибыль, валюта и т. п.) — каждая во всю ширину изображения.
+    Если передана ``stake_value``, дополнительно размываются строки,
+    содержащие эту сумму (на случай, если метка и сумма стоят раздельно и
+    сумма не попала под денежный паттерн). Если координаты недоступны или
+    ничего не нашлось, замазывается нижняя половина изображения.
+    """
+    from PIL import Image, ImageFilter
+
+    image = Image.open(io.BytesIO(image_bytes))
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+
+    blur_boxes = _money_blur_boxes(
+        boxes, image.width, image.height, stake_value=stake_value
+    )
+    for (x0, y0, x1, y1) in blur_boxes:
+        # PIL требует x0 < x1 и y0 < y1; координаты нормализуем в
+        # _money_blur_boxes, но на всякий случай пропускаем вырожденные.
+        if x1 <= x0 or y1 <= y0:
+            continue
+        region = image.crop((x0, y0, x1, y1))
+        region = region.filter(ImageFilter.GaussianBlur(radius=_BLUR_RADIUS))
+        image.paste(region, (x0, y0))
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _stake_tokens(stake_value: float | None) -> list[str]:
+    """Вернуть текстовые представления суммы для поиска в строках OCR.
+
+    Например, 138.0 → ``['138.00', '138,00', '138']``.
+    """
+    if stake_value is None:
+        return []
+    s = f"{stake_value:.2f}"
+    return [s, s.replace(".", ","), str(int(stake_value))]
+
+
+def _money_blur_boxes(
+    boxes: list[OcrLine] | None,
+    image_width: int,
+    image_height: int,
+    *,
+    stake_value: float | None = None,
+) -> list[tuple[int, int, int, int]]:
+    """Вернуть прямоугольники для размытия всех строк с деньгами.
+
+    Для каждой строки, где встречается информация о деньгах (по ``_MONEY_RE``)
+    либо содержится сумма ставки (``stake_value``), размывается **вся
+    горизонтальная полоса** от левого до правого края изображения.
+    Дополнительно размывается следующая по вертикали строка, если в ней есть
+    цифры и она расположена близко — так ловится случай, когда метка
+    («Ставка») и сумма («100.00») стоят на разных строках.
+    Координаты нормализуются (Windows OCR иногда возвращает отрицательную
+    ширину/высоту bounding rect).
+    """
+    pad = _BLUR_PADDING
+    stake_tokens = _stake_tokens(stake_value)
+
+    if not boxes:
+        # Фолбэк: замазываем нижнюю половину изображения, где обычно стоит
+        # сумма, ставка и возможная выплата.
+        return [(0, int(image_height * 0.5), image_width, image_height)]
+
+    # Сортируем строки по вертикали, чтобы надёжно определять «следующую».
+    ordered = sorted(boxes, key=lambda b: min(float(b.y), float(b.bottom)))
+
+    def is_money(idx: int) -> bool:
+        text = ordered[idx].text
+        if _MONEY_RE.search(text):
+            return True
+        return any(tok and tok in text for tok in stake_tokens)
+
+    money_indices = {i for i in range(len(ordered)) if is_money(i)}
+    blur_indices: set[int] = set(money_indices)
+
+    # Для каждой денежной строки пробуем захватить следующую строку с суммой.
+    for idx in money_indices:
+        nxt = idx + 1
+        if nxt >= len(ordered):
+            continue
+        nxt_box = ordered[nxt]
+        nxt_top = min(float(nxt_box.y), float(nxt_box.bottom))
+        cur_bottom = max(float(ordered[idx].y), float(ordered[idx].bottom))
+        gap = nxt_top - cur_bottom
+        # следующая строка близко (меньше ~2 высот строки) и содержит цифры
+        if gap < 40 and any(ch.isdigit() for ch in nxt_box.text):
+            blur_indices.add(nxt)
+
+    result: list[tuple[int, int, int, int]] = []
+    for idx in blur_indices:
+        box = ordered[idx]
+        top = min(float(box.y), float(box.bottom))
+        bottom = max(float(box.y), float(box.bottom))
+        y0 = max(0, int(top) - pad)
+        y1 = min(image_height, int(bottom) + pad)
+        if y1 > y0:
+            result.append((0, y0, image_width, y1))
+
+    if result:
+        return result
+    return [(0, int(image_height * 0.5), image_width, image_height)]

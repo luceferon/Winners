@@ -33,14 +33,16 @@ const BLOCKS = {
   },
   telegram: {
     save: 'Сохранить настройки Telegram',
-    hint: 'Токен бота выдаёт @BotFather, ID чата — @userinfobot. Сообщения отправляет сервер, поэтому браузер можно закрывать.',
+    hint: 'Токен бота выдаёт @BotFather. Добавьте бота в группу и назначьте администратором, сохраните токен и нажмите «Определить группу» — её ID подставится автоматически. Сообщения отправляет сервер, поэтому браузер можно закрывать.',
     test: 'Отправить тестовое сообщение',
+    detect: 'Определить группу',
     fields: [
       { key: 'telegram_enabled', type: 'switch', label: 'Отправлять уведомления в Telegram' },
       { key: 'telegram_bot_token', type: 'text', label: 'Токен бота', placeholder: '123456789:AA...' },
-      { key: 'telegram_chat_id', type: 'text', label: 'ID чата', placeholder: '123456789' },
+      { key: 'telegram_chat_id', type: 'text', label: 'ID чата или группы', placeholder: '-1001234567890' },
       { key: 'telegram_notify_on_create', type: 'switch', label: 'Уведомлять о новых ставках' },
       { key: 'telegram_notify_on_settle', type: 'switch', label: 'Уведомлять о расчёте ставок' },
+      { key: 'telegram_send_screenshot', type: 'switch', label: 'Отправлять скриншот ставки (тест)' },
     ],
   },
 };
@@ -144,6 +146,32 @@ function renderBlock(selector, blockKey) {
       }
     });
     actions.push(testBtn);
+  }
+
+  if (block.detect) {
+    const detectBtn = h('button', { class: 'btn ghost', type: 'button' }, block.detect);
+    detectBtn.addEventListener('click', async () => {
+      detectBtn.disabled = true;
+      try {
+        const result = await api.detectTelegram();
+        const input = host.querySelector('input[name="telegram_chat_id"]');
+        if (input) input.value = result.chat_id;
+        store.settings = { ...(store.settings || {}), telegram_chat_id: result.chat_id };
+        const label = result.title ? `«${result.title}» · ${result.chat_id}` : result.chat_id;
+        if (result.is_admin) {
+          toast('Группа найдена', `${label} — бот администратор`, 'ok');
+        } else if (result.warning) {
+          toast('Группа найдена', `${label}. ${result.warning}`, 'warn');
+        } else {
+          toast('Группа найдена', `${label}. Бот не администратор группы`, 'warn');
+        }
+      } catch (error) {
+        notifyError(error);
+      } finally {
+        detectBtn.disabled = false;
+      }
+    });
+    actions.push(detectBtn);
   }
 
   if (block.hint) {

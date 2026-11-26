@@ -6,3 +6,6 @@ python run.py --port 8803 --reload.txt
 app/__pycache__/schemas.cpython-314.pyc
 app/api/__pycache__/bets.cpython-314.pyc
 winnner.bat
+app/__init__.py
+/app/__pycache__
+/app/api/__pycache__

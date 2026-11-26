@@ -12,6 +12,7 @@ import logging
 import time
 import urllib.error
 import urllib.request
+import uuid
 from typing import Any
 
 from fastapi import BackgroundTasks
@@ -21,10 +22,14 @@ from app.services import settings_service
 
 logger = logging.getLogger("winners.telegram")
 
-API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+API_BASE = "https://api.telegram.org/bot{token}/{method}"
 TIMEOUT_SECONDS = 5.0
-MAX_RETRIES = 3
+MAX_RETRIES = 10
 RETRY_DELAY_SECONDS = 1.0
+
+# Типы чатов, которые считаются группой, и статусы участника-администратора.
+GROUP_CHAT_TYPES = {"group", "supergroup"}
+ADMIN_STATUSES = {"administrator", "creator"}
 
 CURRENCY_SIGNS = {"RUB": "₽", "USD": "$", "EUR": "€", "KZT": "₸"}
 
@@ -67,7 +72,12 @@ def _bold(text: str) -> str:
 
 
 def bet_created_text(bet: dict[str, Any], currency: str = "RUB") -> str:
-    """Сообщение о новой ставке."""
+    """Сообщение о новой ставке.
+
+    Финансовые данные (сумма, возможная выплата) намеренно не включаются —
+    чтобы не светить суммы в Telegram. Остаются событие, прогноз и
+    коэффициент.
+    """
     lines = []
     sport = bet.get("sport") or "без вида спорта"
 
@@ -84,10 +94,6 @@ def bet_created_text(bet: dict[str, Any], currency: str = "RUB") -> str:
                 lines.append(f"{_bold(event_name)} — {prediction}, кэф {_coefficient(coeff)}")
             else:
                 lines.append(f"{_bold(event_name)} — кэф {_coefficient(coeff)}")
-        # Общая сумма всех ставок в экспрессе
-        total_stake = sum(leg.get("stake", 0) for leg in legs)
-        if total_stake:
-            lines.append(f"Сумма {_money(total_stake, currency)}")
     else:
         title = f"🎯 Новая ставка · {sport}"
         lines = [title, _bold(str(bet.get("event_name") or ""))]
@@ -95,13 +101,7 @@ def bet_created_text(bet: dict[str, Any], currency: str = "RUB") -> str:
         if bet.get("prediction"):
             lines.append(f"Прогноз: {bet['prediction']}")
 
-        lines.append(
-            f"Кэф {_coefficient(bet.get('coefficient'))} · "
-            f"Сумма {_money(bet.get('stake'), currency)}"
-        )
-
-        if bet.get("potential_payout"):
-            lines.append(f"Возможная выплата: {_money(bet.get('potential_payout'), currency)}")
+        lines.append(f"Кэф {_coefficient(bet.get('coefficient'))}")
 
         if bet.get("comment"):
             lines.append(f"Комментарий: {bet['comment']}")
@@ -110,71 +110,114 @@ def bet_created_text(bet: dict[str, Any], currency: str = "RUB") -> str:
 
 
 def bet_settled_text(bet: dict[str, Any], currency: str = "RUB") -> str:
-    """Сообщение о рассчитанной ставке («зашла или нет»)."""
+    """Сообщение о рассчитанной ставке («зашла или нет»).
+
+    Финансовые данные (сумма, выплата, прибыль) намеренно не включаются —
+    чтобы не светить суммы в Telegram. Остаются статус, вид спорта, событие
+    и коэффициент.
+    """
     status = str(bet.get("status") or "")
     icon, title = STATUS_TITLES.get(status, ("ℹ️", status))
     lines = [
         f"{icon} {title} · {_bold(str(bet.get('sport') or 'без вида спорта'))}",
         _bold(str(bet.get("event_name") or "")),
-        f"Кэф {_coefficient(bet.get('coefficient'))} · "
-        f"Сумма {_money(bet.get('stake'), currency)}",
+        f"Кэф {_coefficient(bet.get('coefficient'))}",
     ]
     if status == "won":
-        lines.append(
-            f"Выплата: {_money(bet.get('payout'), currency)} "
-            f"({_signed_money(bet.get('profit'), currency)})"
-        )
+        lines.append("Ставка зашла")
     elif status == "lost":
-        lines.append(f"Потеря: {_money(bet.get('stake'), currency)}")
+        lines.append("Ставка не зашла")
     elif status == "push":
-        lines.append(f"Возврат суммы ставки: {_money(bet.get('stake'), currency)}")
+        lines.append("Возврат")
     else:
-        lines.append("Ставка отменена, сумма возвращена")
+        lines.append("Ставка отменена")
     return "\n".join(line for line in lines if line)
 
 
-# --- отправка ---------------------------------------------------------------
+# --- вызовы Bot API ---------------------------------------------------------
 
-def _post(token: str, chat_id: str, text: str) -> tuple[bool, str]:
-    """Отправить сообщение через Bot API. Возвращает (успех, текст ошибки)."""
-    payload = json.dumps(
-        {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
-    ).encode("utf-8")
+def _api_call(
+    token: str,
+    method: str,
+    params: dict[str, Any] | None = None,
+    *,
+    timeout: float = TIMEOUT_SECONDS,
+) -> tuple[bool, Any, str]:
+    """Вызвать метод Bot API. Возвращает (успех, результат, текст ошибки)."""
+    payload = json.dumps(params or {}).encode("utf-8")
     request = urllib.request.Request(
-        API_URL.format(token=token),
+        API_BASE.format(token=token, method=method),
         data=payload,
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             body = response.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         try:
             detail = json.loads(exc.read().decode("utf-8", "replace")).get("description")
         except Exception:  # тело ответа может быть не JSON
             detail = None
-        return False, str(detail or f"HTTP {exc.code}")
+        return False, None, str(detail or f"HTTP {exc.code}")
     except (urllib.error.URLError, OSError) as exc:
-        return False, f"сеть недоступна ({exc})"
+        return False, None, f"сеть недоступна ({exc})"
 
     try:
         data = json.loads(body)
     except ValueError:
-        return False, "некорректный ответ Telegram"
+        return False, None, "некорректный ответ Telegram"
     if not data.get("ok"):
-        return False, str(data.get("description") or "Telegram отклонил запрос")
-    return True, ""
+        return False, None, str(data.get("description") or "Telegram отклонил запрос")
+    return True, data.get("result"), ""
 
 
-def send_message(text: str, token: str, chat_id: str) -> bool:
-    """Отправить сообщение с повторными попытками (до 3 раз)."""
+def _post(
+    token: str,
+    chat_id: str,
+    text: str,
+    *,
+    reply_to_message_id: int | None = None,
+) -> tuple[bool, int | None, str]:
+    """Отправить сообщение через Bot API.
+
+    Возвращает (успех, message_id или None, текст ошибки).
+    """
+    params: dict[str, Any] = {
+        "chat_id": chat_id,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
+    if reply_to_message_id is not None:
+        params["reply_to_message_id"] = reply_to_message_id
+    ok, result, error = _api_call(token, "sendMessage", params)
+    message_id = (
+        int(result.get("message_id"))
+        if ok and isinstance(result, dict) and result.get("message_id")
+        else None
+    )
+    return ok, message_id, error
+
+
+def send_message(
+    text: str,
+    token: str,
+    chat_id: str,
+    *,
+    reply_to_message_id: int | None = None,
+) -> int | None:
+    """Отправить сообщение с повторными попытками (до 3 раз).
+
+    Возвращает ``message_id`` отправленного сообщения или ``None`` при неудаче.
+    """
     last_error = ""
     for attempt in range(1, MAX_RETRIES + 1):
-        ok, error = _post(token, chat_id, text)
+        ok, message_id, error = _post(
+            token, chat_id, text, reply_to_message_id=reply_to_message_id
+        )
         if ok:
             if attempt > 1:
                 logger.info("Уведомление в Telegram отправлено с попытки %d", attempt)
-            return True
+            return message_id
         last_error = error
         if attempt < MAX_RETRIES:
             logger.warning(
@@ -190,7 +233,77 @@ def send_message(text: str, token: str, chat_id: str) -> bool:
         MAX_RETRIES,
         last_error,
     )
-    return False
+    return None
+
+
+def send_photo(
+    token: str,
+    chat_id: str,
+    photo_bytes: bytes,
+    caption: str = "",
+    *,
+    reply_to_message_id: int | None = None,
+) -> tuple[bool, int | None, str]:
+    """Отправить фото через ``sendPhoto`` (multipart/form-data).
+
+    Возвращает (успех, message_id или None, текст ошибки). Используется для
+    отправки скриншота ставки с замазанной суммой (тестовая фича).
+    """
+    boundary = f"----Winners{uuid.uuid4().hex}"
+    lines: list[bytes] = []
+
+    def add_field(name: str, value: str) -> None:
+        lines.append(f"--{boundary}\r\n".encode("utf-8"))
+        lines.append(
+            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8")
+        )
+        lines.append(value.encode("utf-8"))
+        lines.append(b"\r\n")
+
+    add_field("chat_id", str(chat_id))
+    if caption:
+        add_field("caption", caption)
+    if reply_to_message_id is not None:
+        add_field("reply_to_message_id", str(reply_to_message_id))
+
+    lines.append(f"--{boundary}\r\n".encode("utf-8"))
+    lines.append(
+        b'Content-Disposition: form-data; name="photo"; filename="bet.png"\r\n'
+    )
+    lines.append(b"Content-Type: image/png\r\n\r\n")
+    lines.append(photo_bytes)
+    lines.append(b"\r\n")
+    lines.append(f"--{boundary}--\r\n".encode("utf-8"))
+
+    body = b"".join(lines)
+    request = urllib.request.Request(
+        API_BASE.format(token=token, method="sendPhoto"),
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            data = json.loads(response.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8", "replace")).get("description")
+        except Exception:
+            detail = None
+        return False, None, str(detail or f"HTTP {exc.code}")
+    except (urllib.error.URLError, OSError) as exc:
+        return False, None, f"сеть недоступна ({exc})"
+    except ValueError:
+        return False, None, "некорректный ответ Telegram"
+
+    if not data.get("ok"):
+        return False, None, str(data.get("description") or "Telegram отклонил запрос")
+    result = data.get("result")
+    message_id = (
+        int(result.get("message_id"))
+        if isinstance(result, dict) and result.get("message_id")
+        else None
+    )
+    return True, message_id, ""
 
 
 def send_test_message(settings: dict[str, Any]) -> tuple[bool, str]:
@@ -199,7 +312,145 @@ def send_test_message(settings: dict[str, Any]) -> tuple[bool, str]:
     chat_id = str(settings.get("telegram_chat_id") or "").strip()
     if not token or not chat_id:
         return False, "Укажите токен бота и ID чата"
-    return _post(token, chat_id, TEST_MESSAGE)
+    ok, _, error = _post(token, chat_id, TEST_MESSAGE)
+    return ok, error
+
+
+# --- определение группы -----------------------------------------------------
+
+def _group_chat_from_update(update: dict[str, Any]) -> dict[str, Any] | None:
+    """Вернуть чат-группу из одного обновления Telegram или None."""
+    for key in ("message", "edited_message", "channel_post", "my_chat_member"):
+        payload = update.get(key)
+        if not isinstance(payload, dict):
+            continue
+        chat = payload.get("chat")
+        if (
+            isinstance(chat, dict)
+            and chat.get("type") in GROUP_CHAT_TYPES
+            and chat.get("id") is not None
+        ):
+            return chat
+    return None
+
+
+def detect_group(token: str) -> tuple[bool, dict[str, Any], str]:
+    """Найти через ``getUpdates`` группу, в которую добавлен бот.
+
+    Возвращает (успех, чат, текст ошибки). Обновления не подтверждаются
+    (offset не передаётся), поэтому вызов можно повторять безопасно.
+    """
+    ok, updates, error = _api_call(token, "getUpdates", {"limit": 100})
+    if not ok:
+        return False, {}, error
+
+    for update in reversed(updates or []):
+        if isinstance(update, dict):
+            chat = _group_chat_from_update(update)
+            if chat:
+                return True, chat, ""
+    return False, {}, (
+        "Группа не найдена. Добавьте бота в группу, назначьте его администратором "
+        "и отправьте сообщение в группе, затем повторите."
+    )
+
+
+def chat_admin_status(token: str, chat_id: Any) -> tuple[bool, str, str]:
+    """Проверить, что бот — администратор чата.
+
+    Возвращает (администратор, статус, текст ошибки).
+    """
+    ok, me, error = _api_call(token, "getMe")
+    if not ok:
+        return False, "", error
+    bot_id = (me or {}).get("id")
+    if not bot_id:
+        return False, "", "не удалось определить бота (getMe)"
+
+    ok, member, error = _api_call(
+        token, "getChatMember", {"chat_id": chat_id, "user_id": bot_id}
+    )
+    if not ok:
+        return False, "", error
+    status = str((member or {}).get("status") or "")
+    return status in ADMIN_STATUSES, status, ""
+
+
+def detect_group_chat(settings: dict[str, Any]) -> tuple[bool, dict[str, Any], str]:
+    """Определить группу бота и проверить права администратора.
+
+    Возвращает (успех, сведения, текст ошибки). При успехе ``сведения``
+    содержат ``chat_id``, ``title``, ``is_admin``, ``status``,
+    а третий элемент — необязательное предупреждение о проверке прав.
+    """
+    token = str(settings.get("telegram_bot_token") or "").strip()
+    if not token:
+        return False, {}, "Укажите токен бота"
+
+    ok, chat, error = detect_group(token)
+    if not ok:
+        return False, {}, error
+
+    chat_id = chat.get("id")
+    is_admin, status, admin_error = chat_admin_status(token, chat_id)
+    result = {
+        "chat_id": chat_id,
+        "title": str(chat.get("title") or ""),
+        "is_admin": is_admin,
+        "status": status,
+    }
+    warning = f"Не удалось проверить права: {admin_error}" if admin_error else ""
+    return True, result, warning
+
+
+def _store_message_id(bet_id: int, message_id: int) -> None:
+    """Сохранить ID сообщения Telegram в ставке (отдельная сессия БД)."""
+    from app.database import SessionLocal
+    from app.models import Bet
+
+    try:
+        with SessionLocal() as db:
+            bet = db.get(Bet, bet_id)
+            if bet is not None:
+                bet.telegram_message_id = message_id
+                db.commit()
+    except Exception:
+        logger.exception("Не удалось сохранить telegram_message_id для ставки #%d", bet_id)
+
+
+def _send_created_and_store(
+    bet_id: int,
+    token: str,
+    chat_id: str,
+    text: str,
+    photo: bytes | None,
+    send_screenshot: bool,
+) -> None:
+    """Фоновая задача: отправить уведомление о создании и сохранить message_id."""
+    message_id: int | None = None
+    if photo and send_screenshot:
+        caption = text
+        if len(caption) > 1024:
+            caption = caption[:1021] + "..."
+        ok, message_id, _ = send_photo(token, chat_id, photo, caption)
+        if not ok:
+            # Если фото не отправилось — пробуем обычное сообщение.
+            message_id = send_message(text, token, chat_id)
+    else:
+        message_id = send_message(text, token, chat_id)
+
+    if message_id is not None:
+        _store_message_id(bet_id, message_id)
+
+
+def _send_settled_reply(
+    token: str,
+    chat_id: str,
+    text: str,
+    reply_to_message_id: int | None,
+) -> None:
+    """Фоновая задача: отправить уведомление о расчёте (ответом на создание)."""
+    send_message(text, token, chat_id, reply_to_message_id=reply_to_message_id)
 
 
 def queue_bet_notification(
@@ -208,10 +459,17 @@ def queue_bet_notification(
     bet: dict[str, Any],
     *,
     event: str,
+    photo: bytes | None = None,
 ) -> None:
     """Поставить уведомление о ставке в фоновые задачи запроса.
 
     ``event`` — ``created`` (новая ставка) или ``settled`` (расчёт).
+    ``photo`` — опциональный скриншот ставки (PNG) для ``sendPhoto``
+    (тестовая фича: отправляется, если включена настройка
+    ``telegram_send_screenshot``).
+
+    При создании ставки сохраняется ``message_id`` отправленного сообщения,
+    чтобы при расчёте уведомление пришло **ответом** на исходное сообщение.
     """
     if event not in {"created", "settled"}:
         raise ValueError(f"Неизвестное событие уведомления: {event}")
@@ -231,5 +489,18 @@ def queue_bet_notification(
 
     currency = str(settings.get("currency") or "RUB")
     text = bet_created_text(bet, currency) if event == "created" else bet_settled_text(bet, currency)
-    if text:
-        background.add_task(send_message, text, token, chat_id)
+
+    bet_id = bet.get("id")
+    if event == "created":
+        background.add_task(
+            _send_created_and_store,
+            bet_id,
+            token,
+            chat_id,
+            text,
+            photo,
+            bool(settings.get("telegram_send_screenshot")),
+        )
+    else:
+        reply_to = bet.get("telegram_message_id")
+        background.add_task(_send_settled_reply, token, chat_id, text, reply_to)

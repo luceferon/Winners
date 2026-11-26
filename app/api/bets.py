@@ -30,7 +30,7 @@ from app.schemas import (
     BetResultUpdate,
     BetUpdate,
 )
-from app.services import bets_service, ocr_service, telegram_service, timeutil
+from app.services import bets_service, ocr_service, screenshot_store, telegram_service, timeutil
 from app.services.bets_service import BetError
 from app.services.ocr_service import OcrError, OcrUnavailableError
 
@@ -164,7 +164,12 @@ def recognize_bet(file: UploadFile | None = File(default=None)) -> BetRecognitio
                 status_code=400,
                 detail="В буфере обмена нет изображения. Скопируйте скриншот и повторите.",
             )
-        return BetRecognitionOut(**ocr_service.parse_image(data))
+        parsed, boxes = ocr_service.parse_image_full(data)
+        result = BetRecognitionOut(**parsed)
+        # тестовая фича: сохраняем скриншот, чтобы отправить его в Telegram
+        # вместе с уведомлением о новой ставке (с замазанной суммой)
+        result.screenshot_token = screenshot_store.store(data, boxes or [])
+        return result
     except (OcrUnavailableError, OcrError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -195,7 +200,26 @@ def create_bet(
         bet = bets_service.create_bet(db, payload)
     except BetError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    telegram_service.queue_bet_notification(background, db, bet.as_dict(), event="created")
+    # тестовая фича: если при создании передан токен скриншота,
+    # замазываем сумму и отправляем фото в Telegram. Любая ошибка
+    # замазывания не должна мешать сохранению ставки.
+    photo: bytes | None = None
+    stored = screenshot_store.retrieve(payload.screenshot_token)
+    if stored is not None:
+        try:
+            photo = ocr_service.blur_stake_region(
+                stored.image_bytes, stored.boxes, stake_value=bet.stake
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger("winners.bets").exception(
+                "Не удалось замазать сумму на скриншоте — фото отправлено не будет"
+            )
+            photo = None
+    telegram_service.queue_bet_notification(
+        background, db, bet.as_dict(), event="created", photo=photo
+    )
     return bet.as_dict()
 
 

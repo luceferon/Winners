@@ -13,7 +13,7 @@ from app.defaults import (
     SPORTS,
     STATUS_LABELS,
 )
-from app.schemas import ActionResult, SettingsOut, SettingsUpdate
+from app.schemas import ActionResult, SettingsOut, SettingsUpdate, TelegramChatOut
 from app.services import settings_service, telegram_service
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -59,3 +59,25 @@ def test_telegram(db: Session = Depends(get_db)) -> ActionResult:
     if not ok:
         raise HTTPException(status_code=400, detail=f"Telegram: {error}")
     return ActionResult(message="Тестовое сообщение отправлено в Telegram")
+
+
+@router.post("/telegram/detect", response_model=TelegramChatOut)
+def detect_telegram_group(db: Session = Depends(get_db)) -> TelegramChatOut:
+    """Определить группу бота (chat_id) и проверить права администратора.
+
+    Ищет группу по последним обновлениям Telegram и сохраняет её chat_id
+    в настройках.
+    """
+    ok, chat, warning = telegram_service.detect_group_chat(settings_service.get_settings(db))
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"Telegram: {warning}")
+
+    chat_id = str(chat["chat_id"])
+    settings_service.update_settings(db, {"telegram_chat_id": chat_id})
+    return TelegramChatOut(
+        chat_id=chat_id,
+        title=str(chat["title"]),
+        is_admin=bool(chat["is_admin"]),
+        status=str(chat["status"]),
+        warning=warning,
+    )

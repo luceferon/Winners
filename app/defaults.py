@@ -49,6 +49,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "telegram_chat_id": "",
     "telegram_notify_on_create": True,
     "telegram_notify_on_settle": True,
+    "telegram_send_screenshot": True,  # тестовая фича: скриншот ставки в Telegram
     # Отображение
     "currency": "RUB",
     "theme": "dark",

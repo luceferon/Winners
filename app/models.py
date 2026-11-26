@@ -106,6 +106,9 @@ class Bet(Base):
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
     payout: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     comment: Mapped[str | None] = mapped_column(Text)
+    # ID сообщения в Telegram, отправленного при создании ставки.
+    # Используется, чтобы ответить на него при расчёте ставки.
+    telegram_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
     settled_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
@@ -152,6 +155,7 @@ class Bet(Base):
             "profit": self.profit,
             "potential_payout": self.potential_payout,
             "comment": self.comment,
+            "telegram_message_id": self.telegram_message_id,
             "created_at": self.created_at,
             "settled_at": self.settled_at,
         }

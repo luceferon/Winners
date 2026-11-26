@@ -66,6 +66,10 @@ def _upgrade_schema(target_engine: Engine) -> None:
             conn.exec_driver_sql(
                 "ALTER TABLE bets ADD COLUMN kind VARCHAR(16) NOT NULL DEFAULT 'single'"
             )
+        if columns and "telegram_message_id" not in columns:
+            conn.exec_driver_sql(
+                "ALTER TABLE bets ADD COLUMN telegram_message_id INTEGER"
+            )
 
         existing = {
             row[0]
